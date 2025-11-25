@@ -17,7 +17,8 @@ class MailService
         private readonly string $fromAddress,
         private readonly string $fromName,
         private readonly string $encryption = 'tls',
-        private readonly string $baseUrl = ''
+        private readonly string $baseUrl = '',
+        private readonly ?EmaillogRepository $emailLogRepository = null,
     ) {}
 
     /**
@@ -25,31 +26,51 @@ class MailService
      */
     public function send(string $toEmail, string $toName, string $subject, string $htmlBody): void
     {
+        
         $mail = new PHPMailer(true);
 
         try {
-            // Servidor SMTP
             $mail->isSMTP();
             $mail->Host       = $this->host;
             $mail->SMTPAuth   = true;
             $mail->Username   = $this->username;
             $mail->Password   = $this->password;
-            $mail->SMTPSecure = $this->encryption;
             $mail->Port       = $this->port;
+            $mail->SMTPSecure = PHPMailer::ENCRYPTION_SMTPS; // SSL 465
 
-            // Remitente y destinatario
+            $mail->CharSet  = 'UTF-8';
+            $mail->Encoding = 'base64';
+
             $mail->setFrom($this->fromAddress, $this->fromName);
-            $mail->addAddress($toEmail, $toName ?: $toEmail);
 
-            // Contenido
+            // 👇 Aceptar uno o varios correos
+            if (is_array($toEmail)) {
+                foreach ($toEmail as $email) {
+                    $mail->addAddress($email, $toName ?: $email);
+                }
+            } else {
+                $mail->addAddress($toEmail, $toName ?: $toEmail);
+            }
+
             $mail->isHTML(true);
             $mail->Subject = $subject;
             $mail->Body    = $htmlBody;
+            $mail->AltBody = strip_tags($htmlBody);
 
             $mail->send();
+
+            // log de exito
+            if($this->emailLogRepository) {
+                $this->emailLogRepository->log($toEmail, $subject, $htmlBody, 'sent', null);
+            }
+
         } catch (MailException $e) {
-            // En producción: loguear
-            throw new \RuntimeException('No se pudo enviar el correo: ' . $e->getMessage(), 0, $e);
+            // log de error
+            if($this->emailLogRepository) {
+                $this->emailLogRepository->log($toEmail, $subject, $htmlBody, 'failed', $e->getMessage());
+            }
+
+            throw new \RuntimeException('Error al enviar el correo: ' . $e->getMessage());
         }
     }
 
@@ -61,9 +82,9 @@ class MailService
         $subject = 'Tu código de verificación (2FA)';
         $body = sprintf(
             '<p>Hola %s,</p>
-             <p>Tu código de verificación es:</p>
+             <p>Tu código de verificación es: </p>
              <p style="font-size: 24px; font-weight: bold;">%s</p>
-             <p>Este código expirará en unos minutos.</p>',
+             <p>Este código expirará en 5 minutos.</p>',
             htmlspecialchars($toName ?: $toEmail, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'),
             htmlspecialchars($code, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
         );
