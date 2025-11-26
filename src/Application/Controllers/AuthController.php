@@ -1,209 +1,185 @@
-<?php
-
-declare(strict_types=1);
+<?php declare(strict_types=1);
 
 namespace App\Application\Controllers;
 
-use App\Application\Services\UserService;
-use App\Application\Services\TwoFactorService;
+use App\Application\Services\JwtService;
+use App\Application\Services\MailService;
 use App\Application\Services\PasswordResetService;
+use App\Application\Services\TwoFactorService;
+use App\Application\Services\UserService;
 use Psr\Http\Message\ResponseInterface as Response;
 use Psr\Http\Message\ServerRequestInterface as Request;
 
 class AuthController
 {
     public function __construct(
-        private readonly UserService $userService,
-        private readonly TwoFactorService $twoFactorService,
-        private readonly PasswordResetService $passwordResetService,
-        private readonly MailService $mailService,
-        private readonly JwtService $jwtService,
+        private UserService $userService,
+        private TwoFactorService $twoFactorService,
+        private JwtService $jwtService,
+        private MailService $mailService,
+        private PasswordResetService $passwordResetService,
     ) {}
 
     // 🔹 Registro
     public function register(Request $request, Response $response): Response
     {
-        $data     = (array) $request->getParsedBody();
+        $data = (array) $request->getParsedBody();
 
-        $email    = isset($data['email']) ? trim($data['email']) : '';
-        $password = isset($data['password']) ? trim($data['password']) : '';
-        $name     = isset($data['name']) ? trim($data['name']) : '';
+        $email = trim(strtolower($data['email'] ?? ''));
+        $password = (string) ($data['password'] ?? '');
+        $name = trim($data['name'] ?? '');
 
         $errors = [];
 
         if ($email === '') {
             $errors['email'][] = 'El email es obligatorio';
-        }elseif (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
-            $errors['email'][] = 'El formato del email es inválido';
         }
         if ($password === '') {
             $errors['password'][] = 'La contraseña es obligatoria';
-        } elseif (strlen($password) < 6) {
-            $errors['password'][] = 'La contraseña debe tener al menos 6 caracteres';
         }
 
         if (!empty($errors)) {
-            $response->getBody()->write(json_encode([
+            return $this->json($response, [
                 'message' => 'Errores de validación',
-                'errors'  => $errors,
-            ], JSON_UNESCAPED_UNICODE));
-            return $response
-                ->withStatus(422)
-                ->withHeader('Content-Type', 'application/json');
+                'errors' => $errors,
+            ], 422);
         }
 
         // Verificar si el email ya está registrado
-        $existingEmail = $this->userRepository->findByEmail($email);
+        $existingEmail = $this->userService->findByEmail($email);
         if ($existingEmail) {
-            $response->getBody()->write(json_encode([
-                'message'=>'El email ya está registrado',
-            ], JSON_UNESCAPED_UNICODE));
-            return $response
-                ->withStatus(409)
-                ->withHeader('Content-Type', 'application/json');
-
+            return $this->json($response, [
+                'message' => 'El email ya está registrado',
+            ], 409);
         }
-        // Hash Contraseña 
+
+        // Hash contraseña
         $hashedPassword = password_hash($password, PASSWORD_DEFAULT);
+
         // Crear usuario
         $userId = $this->userService->createUser($email, $hashedPassword, $name);
 
-        //reponse de exito
+        // Generar y almacenar código 2FA
+        $code = $this->twoFactorService->generateCode();
+        $this->twoFactorService->storeCode($userId, $code);
+
+        // Enviar correo con código
+        $this->mailService->sendTwoFactorCode($email, $name, $code);
+
+        // Respuesta de éxito
         return $this->json($response, [
-            'message' => 'Usuario registrado correctamente',
-            'userId'  => $userId,
+            'message' => 'Usuario registrado. Revisa tu correo para verificar el código de verificación.',
         ], 201);
     }
-    // 🔹 Login + 2FA (ya lo tenías)
+
+    // 🔹 Login + 2FA
     public function login(Request $request, Response $response): Response
     {
         $data = (array) $request->getParsedBody();
 
-        $email    = trim($data['email'])    ?? '';
-        $password = $data['password'] ?? '';
+        $email = trim(strtolower($data['email'] ?? ''));
+        $password = (string) ($data['password'] ?? '');
 
-        if($email === ''){
-            $response->getBody()->write(json_encode([
+        if ($email === '') {
+            return $this->json($response, [
                 'message' => 'El email es obligatorio',
-            ], JSON_UNESCAPED_UNICODE));
-            return $response
-                ->withStatus(422)
-                ->withHeader('Content-Type', 'application/json');
+            ], 422);
         }
-        if($password === ''){
-            $response->getBody()->write(json_encode([
-                'message' => 'La contraseña es obligatoria',
-            ], JSON_UNESCAPED_UNICODE));
-            return $response
-                ->withStatus(422)
-                ->withHeader('Content-Type', 'application/json');
 
+        if ($password === '') {
+            return $this->json($response, [
+                'message' => 'La contraseña es obligatoria',
+            ], 422);
         }
 
         $userId = $this->userService->authenticate($email, $password);
 
         if (!$userId) {
-            $response->getBody()->write(json_encode([
+            return $this->json($response, [
                 'message' => 'Credenciales inválidas',
-            ], JSON_UNESCAPED_UNICODE));
-            return $response
-                ->withStatus(401)
-                ->withHeader('Content-Type', 'application/json');
+            ], 401);
         }
 
-        //obtener datos del usuario para el nombre
+        // Obtener datos del usuario para el nombre
         $user = $this->userService->findById($userId);
         $name = $user['name'] ?? null;
 
-        //Generar y guardar el código 2FA
+        // Generar y guardar el código 2FA
         $code = $this->twoFactorService->generateCode();
         $this->twoFactorService->storeCode($userId, $code);
 
-        // TODO: enviar por correo (SES) ó SMTP
         try {
-             $this->mailService->sendTwoFactorCode($email, $name, $code);
-             $response->getBody()->write(json_encode([
-                 'message' => 'Código 2FA enviado',
-                 'userId'  => $userId,
-             ], JSON_UNESCAPED_UNICODE));
-             return $response
-                 ->withStatus(200)
-                 ->withHeader('Content-Type', 'application/json');
+            $this->mailService->sendTwoFactorCode($email, $name, $code);
+
+            return $this->json($response, [
+                'message' => 'Código 2FA enviado',
+                'userId' => $userId,
+            ]);
         } catch (\Throwable $e) {
-            // Si no se puede enviar, mejor no dejar al usuario a medias
-            $response->getBody()->write(json_encode([
+            return $this->json($response, [
                 'message' => 'No se pudo enviar el código de verificación. Intenta más tarde.',
-            ], JSON_UNESCAPED_UNICODE));
-            return $response
-                ->withStatus(500)
-                ->withHeader('Content-Type', 'application/json');
+            ], 500);
         }
-
-
     }
 
     // 🔹 Olvidé mi password
     public function forgotPassword(Request $request, Response $response): Response
-{
-    $data  = (array) $request->getParsedBody();
-    $email = trim($data['email'] ?? '');
+    {
+        $data = (array) $request->getParsedBody();
+        $email = trim($data['email'] ?? '');
 
-    // 1. Validación
-    if ($email === '') {
-        return $this->json(
-            $response,
-            ['message' => 'El email es obligatorio'],
-            422
-        );
-    }
+        if ($email === '') {
+            return $this->json(
+                $response,
+                ['message' => 'El email es obligatorio'],
+                422
+            );
+        }
 
-    if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
-        return $this->json(
-            $response,
-            ['message' => 'Formato de email inválido'],
-            422
-        );
-    }
+        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            return $this->json(
+                $response,
+                ['message' => 'Formato de email inválido'],
+                422
+            );
+        }
 
-    // 2. Buscar usuario
-    $user = $this->userService->findByEmail($email);
+        $user = $this->userService->findByEmail($email);
 
-    // 3. Respuesta neutral (por seguridad)
-    if (!$user) {
+        // Respuesta neutral (por seguridad)
+        if (!$user) {
+            return $this->json($response, [
+                'message' => 'Si el correo existe, se enviará un enlace de recuperación',
+            ]);
+        }
+
+        $token = $this->passwordResetService->createToken((int) $user['id']);
+
+        try {
+            $this->mailService->sendPasswordReset(
+                $email,
+                $user['name'] ?? null,
+                $token
+            );
+        } catch (\Throwable $e) {
+            return $this->json(
+                $response,
+                ['message' => 'No se pudo enviar el correo de recuperación. Intenta más tarde.'],
+                500
+            );
+        }
+
         return $this->json($response, [
             'message' => 'Si el correo existe, se enviará un enlace de recuperación',
         ]);
     }
 
-    // 4. Crear token
-    $token = $this->passwordResetService->createToken((int)$user['id']);
-
-    // 5. Enviar correo
-    try {
-        $this->mailService->sendPasswordReset(
-            $email,
-            $user['name'] ?? null,
-            $token
-        );
-    } catch (\Throwable $e) {
-        return $this->json(
-            $response,
-            ['message' => 'No se pudo enviar el correo de recuperación. Intenta más tarde.'],
-            500
-        );
-    }
-
-    return $this->json($response, [
-        'message' => 'Si el correo existe, se enviará un enlace de recuperación',
-    ]);
-}
-
     // 🔹 Reset de password con token
     public function resetPassword(Request $request, Response $response): Response
     {
-        $data        = (array) $request->getParsedBody();
-        $token       = $data['token']       ?? '';
-        $newPassword = $data['newPassword'] ?? '';
+        $data = (array) $request->getParsedBody();
+        $token = trim($data['token'] ?? '');
+        $newPassword = trim($data['newPassword'] ?? '');
 
         if ($token === '' || $newPassword === '') {
             return $this->json(
@@ -229,59 +205,50 @@ class AuthController
         ]);
     }
 
-    // 🔹 Verificar 2FA (ya lo tenías)
-    public function verifyCode(Request $request, Response $response): Response
+    // 🔹 Verificar 2FA
+    public function verifyOtp(Request $request, Response $response): Response
     {
-        $data   = (array) $request->getParsedBody();
-        $userId = isset($data['userId']) ? (int) $data['userId'] : 0;
-        $code   = $data['code'] ?? '';
-    
-        $isValid = $this->twoFactorService->verifyCode($userId, $code);
-    
-        if (! $isValid) {
-            return $this->json(
-                $response,
-                ['message' => 'Código inválido o expirado'],
-                400
-            );
+        $data = (array) $request->getParsedBody();
+        $email = trim(strtolower($data['email'] ?? ''));
+        $code = trim($data['code'] ?? '');
+
+        if ($email === '' || $code === '') {
+            return $this->json($response, [
+                'message' => 'email y code son obligatorios',
+            ], 422);
         }
-    
-        // Recuperar datos básicos del usuario para el token
-        $user = $this->userService->findById($userId);
+
+        $user = $this->userService->findByEmail($email);
+
         if (!$user) {
-            return $this->json(
-                $response,
-                ['message' => 'Usuario no encontrado'],
-                404
-            );
+            return $this->json($response, ['message' => 'Código o usuario inválido'], 400);
         }
-    
-        // Aquí generamos el JWT REAL
-        $token = $this->jwtService->generateToken(
-            (int) $user['id'],
-            $user['email'] ?? null,
-            $user['role']  ?? null, // si tienes roles
-        );
-    
+
+        if (!$this->twoFactorService->verifyCode((int) $user['id'], $code)) {
+            return $this->json($response, ['message' => 'Código incorrecto o expirado'], 400);
+        }
+
+        $tokens = $this->jwtService->generateAuthTokens((int) $user['id'], $user['email']);
+
         return $this->json($response, [
             'message' => '2FA verificado correctamente',
-            'token'   => $token,
-            'type'    => 'Bearer',
-            'expiresIn' => $this->getJwtTtl(), // opcional
+            'token' => $tokens['access_token'] ?? null,
+            'refresh_token' => $tokens['refresh_token'] ?? null,
         ]);
     }
-    
+
     // helper opcional para exponer el TTL
     private function getJwtTtl(): int
     {
         return (int) ($_ENV['JWT_TTL'] ?? 3600);
     }
-    
 
     // 🔹 Helper para respuestas JSON limpias
     private function json(Response $response, array $data, int $status = 200): Response
     {
-        $response->getBody()->write((string) json_encode($data));
+        $response->getBody()->write(
+            (string) json_encode($data, JSON_UNESCAPED_UNICODE)
+        );
 
         return $response
             ->withStatus($status)

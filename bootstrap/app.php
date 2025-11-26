@@ -3,83 +3,131 @@
 declare(strict_types=1);
 
 use Slim\Factory\AppFactory;
-use Dotenv\Dotenv;
+use DI\Container;
+use Slim\Middleware\BodyParsingMiddleware;
 
 use App\Infrastructure\Database\Connection;
 use App\Infrastructure\Database\UserRepository;
 
-use App\Application\Services\UserService;
-use App\Application\Services\TwoFactorService;
-use App\Application\Services\PasswordResetService;
 use App\Application\Services\JwtService;
 use App\Application\Services\MailService;
-
-
+use App\Application\Services\PasswordResetService;
+use App\Application\Services\TwoFactorService;
+use App\Application\Services\UserService;
 
 use App\Application\Controllers\AuthController;
 use App\Application\Middleware\JwtAuthMiddleware;
 
 require __DIR__ . '/../vendor/autoload.php';
 
-// .env
-$dotenv = Dotenv::createImmutable(dirname(__DIR__));
-$dotenv->load();
+// -------------------------------------------------------------
+// Crear contenedor
+// -------------------------------------------------------------
+$container = new Container();
 
-// config
-$settings = require __DIR__ . '/../config/settings.php';
+// -------------------------------------------------------------
+// Cargar settings.php (soporta ambas formas: con o sin 'settings')
+// -------------------------------------------------------------
+$rawSettings = require __DIR__ . '/../config/settings.php';
+$settings = $rawSettings['settings'] ?? $rawSettings;
 
-$dbConfig  = $settings['db'];
-$jwtConfig = $settings['jwt'];
+// Guardar settings "plano" en el contenedor
+$container->set('settings', $settings);
 
-// Infra
-$dbConnection    = new Connection($dbConfig);
-$userRepository  = new UserRepository($dbConnection);
-
-// Services
-$userService          = new UserService($userRepository);
-$twoFactorService     = new TwoFactorService($dbConnection);
-$passwordResetService = new PasswordResetService($dbConnection);
-
-$jwtService = new JwtService(
-    $jwtConfig['secret'],
-    $jwtConfig['issuer'],
-    $jwtConfig['audience'],
-    $jwtConfig['ttl']
-);
-
-// MailService desde .env
-$mailService = new MailService(
-    host:        $_ENV['MAIL_HOST']         ?? 'localhost',
-    port:        (int) ($_ENV['MAIL_PORT']  ?? 25),
-    username:    $_ENV['MAIL_USERNAME']     ?? '',
-    password:    $_ENV['MAIL_PASSWORD']     ?? '',
-    fromAddress: $_ENV['MAIL_FROM_ADDRESS'] ?? 'no-reply@example.com',
-    fromName:    $_ENV['MAIL_FROM_NAME']    ?? 'API',
-    encryption:  $_ENV['MAIL_ENCRYPTION']   ?? 'tls',
-    baseUrl:     $_ENV['MAIL_BASE_URL']     ?? 'http://localhost:8080'
-);
-
-$jwtAuthMiddleware = new JwtAuthMiddleware($jwtService);
-
-// Controller
-$authController = new AuthController(
-    $userService,
-    $twoFactorService,
-    $passwordResetService,
-    $jwtService,
-    $mailService,
-);
-
-// Slim app
+AppFactory::setContainer($container);
 $app = AppFactory::create();
 
-// CORS + middlewares aquí...
+$app->addBodyParsingMiddleware();
+// -------------------------------------------------------------
+// Registrar conexión a la BD
+// -------------------------------------------------------------
+$container->set(Connection::class, function ($c) {
+    $settings = $c->get('settings');
+    return new Connection($settings['db']);
+});
 
-$app->addBodyParsingMiddleware();  // 👈 IMPORTANTE
-$app->addRoutingMiddleware();
-$app->addErrorMiddleware(true, true, true);
+// -------------------------------------------------------------
+// Registrar repositorios
+// -------------------------------------------------------------
+$container->set(UserRepository::class, function ($c) {
+    return new UserRepository($c->get(Connection::class));
+});
 
-// Rutas
-(require __DIR__ . '/../routes/api.php')($app, $authController, $jwtAuthMiddleware);
+// -------------------------------------------------------------
+// Registrar servicios
+// -------------------------------------------------------------
+$container->set(UserService::class, function ($c) {
+    return new UserService($c->get(UserRepository::class));
+});
+
+$container->set(TwoFactorService::class, function ($c) {
+    return new TwoFactorService(
+        $c->get(Connection::class)
+    );
+});
+
+$container->set(PasswordResetService::class, function ($c) {
+    return new PasswordResetService(
+        $c->get(Connection::class)
+    );
+});
+
+
+
+$container->set(MailService::class, function ($c) {
+    $mail = $c->get('settings')['mail'];
+
+    return new MailService(
+        host:        $mail['host'],
+        port:        $mail['port'],
+        username:    $mail['username'],
+        password:    $mail['password'],
+        fromAddress: $mail['fromAddress'],
+        fromName:    $mail['fromName'],
+        encryption:  $mail['encryption'],
+        baseUrl:     $mail['baseUrl']
+    );
+});
+
+// -------------------------------------------------------------
+// Registrar controlador y middleware (para las rutas)
+// -------------------------------------------------------------
+$container->set(AuthController::class, function ($c) {
+    return new AuthController(
+         $c->get(UserService::class),         
+        $c->get(TwoFactorService::class),     
+        $c->get(JwtService::class),           
+        $c->get(MailService::class),         
+        $c->get(PasswordResetService::class), 
+    );
+});
+
+$container->set(JwtService::class, function ($c) {
+    $settings = $c->get('settings');
+    $jwt      = $settings['jwt'];
+
+    return new JwtService(
+        $jwt['secret'],        // string
+        $jwt['issuer'],        // string
+        $jwt['audience'],      // string
+        $jwt['ttl'],           // int
+        $jwt['refresh_ttl']    // int
+    );
+});
+
+
+// ----------------------------------------------------------
+// Middleware de error
+// -----------------------------------------------------------
+$errorMiddleware = $app->addErrorMiddleware(
+    $settings['app']['debug'] ?? false,
+    true,
+    true
+);
+
+// -------------------------------------------------------------
+// Cargar rutas
+// -------------------------------------------------------------
+(require __DIR__ . '/../routes/api.php')($app);
 
 return $app;

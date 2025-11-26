@@ -6,6 +6,7 @@ namespace App\Application\Services;
 
 use PHPMailer\PHPMailer\PHPMailer;
 use PHPMailer\PHPMailer\Exception as MailException;
+use App\Infrastructure\Database\EmailLogRepository;
 
 class MailService
 {
@@ -18,7 +19,7 @@ class MailService
         private readonly string $fromName,
         private readonly string $encryption = 'tls',
         private readonly string $baseUrl = '',
-        private readonly ?EmaillogRepository $emailLogRepository = null,
+        private readonly ?EmailLogRepository $emailLogRepository = null,
     ) {}
 
     /**
@@ -36,7 +37,8 @@ class MailService
             $mail->Username   = $this->username;
             $mail->Password   = $this->password;
             $mail->Port       = $this->port;
-            $mail->SMTPSecure = PHPMailer::ENCRYPTION_SMTPS; // SSL 465
+            // $mail->SMTPSecure = PHPMailer::ENCRYPTION_SMTPS; // SSL 465
+            $mail->SMTPSecure = $this->encryption;
 
             $mail->CharSet  = 'UTF-8';
             $mail->Encoding = 'base64';

@@ -38,4 +38,9 @@ class UserService
             'name'     => $name
         ]);
     }
+
+    public function findByEmail(string $email): ?array
+    {
+        return $this->users->findByEmail($email);
+    }
 }
