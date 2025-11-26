@@ -1,6 +1,4 @@
-<?php
-
-declare(strict_types=1);
+<?php declare(strict_types=1);
 
 namespace App\Application\Services;
 
@@ -28,19 +26,30 @@ class UserService
         return (int) $user['id'];
     }
 
-    public function createUser(string $email, string $password,string $name): int
+    public function createUser(string $email, string $password, string $name): int
     {
         $hashed = password_hash($password, PASSWORD_DEFAULT);
 
         return $this->users->create([
-            'email'    => $email,
+            'email' => $email,
             'password' => $hashed,
-            'name'     => $name
+            'name' => $name
         ]);
     }
 
     public function findByEmail(string $email): ?array
     {
         return $this->users->findByEmail($email);
+    }
+
+    public function findById(int $id): ?array
+    {
+        return $this->users->findById($id);
+    }
+
+    public function updatePassword(int $userId, string $newPassword): void
+    {
+        $hashed = password_hash($newPassword, PASSWORD_DEFAULT);
+        $this->users->updatePassword($userId, $hashed);
     }
 }
