@@ -1,16 +1,13 @@
-<?php
+<?php declare(strict_types=1);
 
-declare(strict_types=1);
-
-use Slim\App;
-use Slim\Routing\RouteCollectorProxy;
 use App\Application\Controllers\AuthController;
 use App\Application\Middleware\JwtAuthMiddleware;
 use Psr\Http\Message\ResponseInterface as Response;
 use Psr\Http\Message\ServerRequestInterface as Request;
+use Slim\Routing\RouteCollectorProxy;
+use Slim\App;
 
 return function (App $app): void {
-
     // =========================================================
     // OPTIONS global para CORS (preflight)
     // =========================================================
@@ -23,7 +20,6 @@ return function (App $app): void {
     // Rutas de autenticación (públicas)
     // =========================================================
     $app->group('/auth', function (RouteCollectorProxy $group) {
-
         // Registro
         $group->post('/register', [AuthController::class, 'register']);
 
@@ -40,22 +36,21 @@ return function (App $app): void {
         $group->post('/forgot-password', [AuthController::class, 'forgotPassword']);
 
         // Reset de contraseña (con token)
+        $group->get('/reset-password', [AuthController::class, 'showResetPasswordForm']);
         $group->post('/reset-password', [AuthController::class, 'resetPassword']);
-
     });
 
     // =========================================================
     // Rutas protegidas con JWT
     // =========================================================
     $app->group('/api', function (RouteCollectorProxy $group) {
-
         // Ejemplo: obtener datos del usuario autenticado
         $group->get('/me', [AuthController::class, 'me']);
 
         // aquí puedes agregar más rutas protegidas, ej:
         // $group->get('/profile', [ProfileController::class, 'show']);
 
-    // Slim + PHP-DI resolverá JwtAuthMiddleware desde el contenedor
+        // Slim + PHP-DI resolverá JwtAuthMiddleware desde el contenedor
     })->add(JwtAuthMiddleware::class);
 
     // =========================================================

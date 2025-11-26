@@ -174,7 +174,90 @@ class AuthController
         ]);
     }
 
-    // 🔹 Reset de password con token
+    // 🔹 Mostrar formulario de reset de password (GET)
+    public function showResetPasswordForm(Request $request, Response $response): Response
+    {
+        $params = $request->getQueryParams();
+        $token = $params['token'] ?? '';
+
+        $html = <<<HTML
+            <!DOCTYPE html>
+            <html lang="es">
+            <head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <title>Restablecer Contraseña</title>
+                <style>
+                    body { font-family: sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; background-color: #f0f2f5; }
+                    .card { background: white; padding: 2rem; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); width: 100%; max-width: 400px; }
+                    h2 { margin-top: 0; color: #333; }
+                    label { display: block; margin-bottom: 0.5rem; color: #666; }
+                    input { width: 100%; padding: 0.75rem; margin-bottom: 1rem; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box; }
+                    button { width: 100%; padding: 0.75rem; background-color: #27A6BA; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 1rem; }
+                    button:hover { background-color: #1f8a9c; }
+                </style>
+            </head>
+            <body>
+                <div class="card">
+                    <h2>Restablecer Contraseña</h2>
+                    <form id="resetForm">
+                        <input type="hidden" id="token" value="{$token}">
+                        
+                        <label for="newPassword">Nueva Contraseña</label>
+                        <input type="password" id="newPassword" required minlength="6" placeholder="Ingresa tu nueva contraseña">
+                        
+                        <button type="submit">Guardar Contraseña</button>
+                    </form>
+                    <p id="message" style="margin-top: 1rem; text-align: center;"></p>
+                </div>
+
+                <script>
+                    document.getElementById('resetForm').addEventListener('submit', async (e) => {
+                        e.preventDefault();
+                        const token = document.getElementById('token').value;
+                        const newPassword = document.getElementById('newPassword').value;
+                        const messageEl = document.getElementById('message');
+                        const btn = e.target.querySelector('button');
+
+                        btn.disabled = true;
+                        btn.textContent = 'Enviando...';
+                        messageEl.textContent = '';
+
+                        try {
+                            const res = await fetch('/auth/reset-password', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ token, newPassword })
+                            });
+
+                            const data = await res.json();
+
+                            if (res.ok) {
+                                messageEl.style.color = 'green';
+                                messageEl.textContent = '¡Contraseña actualizada correctamente!';
+                                e.target.reset();
+                            } else {
+                                messageEl.style.color = 'red';
+                                messageEl.textContent = data.message || 'Error al actualizar';
+                            }
+                        } catch (err) {
+                            messageEl.style.color = 'red';
+                            messageEl.textContent = 'Error de conexión';
+                        } finally {
+                            btn.disabled = false;
+                            btn.textContent = 'Guardar Contraseña';
+                        }
+                    });
+                </script>
+            </body>
+            </html>
+            HTML;
+
+        $response->getBody()->write($html);
+        return $response;
+    }
+
+    // 🔹 Reset de password con token (POST)
     public function resetPassword(Request $request, Response $response): Response
     {
         $data = (array) $request->getParsedBody();
